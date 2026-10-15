@@ -1,0 +1,27 @@
+{
+	"name": "omp-council",
+	"version": "0.1.0",
+	"description": "Council for oh-my-pi: several models debate a problem until they unanimously accept and independently verify one proposal",
+	"type": "module",
+	"omp": {
+		"extensions": [
+			"./src/index.ts"
+		]
+	},
+	"files": [
+		"src",
+		"README.md"
+	],
+	"scripts": {
+		"check": "tsgo -p tsconfig.json --noEmit && oxlint src test && oxfmt --check 'src/**/*.ts' 'test/**/*.ts'",
+		"fmt": "oxfmt 'src/**/*.ts' 'test/**/*.ts'",
+		"test": "bun test"
+	},
+	"devDependencies": {
+		"@oh-my-pi/pi-coding-agent": "18.11.1",
+		"@types/bun": "^1.4.3",
+		"@typescript/native-preview": "^7.0.0-dev.20260707.2",
+		"oxfmt": "^0.73.0",
+		"oxlint": "^1.88.0"
+	}
+}

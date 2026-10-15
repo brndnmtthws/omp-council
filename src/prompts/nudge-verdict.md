@@ -1,0 +1,1 @@
+Your verdict on {{proposalId}} v{{version}} is not recorded yet. Call `council_verify` now with `confirm` or `reject`, a substantive rationale, and an assessment for every objection awaiting confirmation.

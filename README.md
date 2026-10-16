@@ -30,7 +30,9 @@ Restart omp afterwards; extensions load at startup. `omp plugin list` shows `omp
 /councilpreset list           # list presets; the active one is marked
 ```
 
-While a council runs, a live board above the editor shows each member's activity, proposals, and spend; the editor stays usable. When it ends, the report is posted to the conversation: the agreed solution with every member's verification, or the state of play if it stopped early.
+While a council runs, a live board above the editor shows each member's activity, proposals, and spend; the editor stays usable. Once a member has been on the same step for 5 seconds, the board shows how long (e.g. `thinking 2m10s`), so a slow or stalled model request is visible. When omp retries a failed provider request, the member shows `retrying <attempt>/<max>: <error>`; context compaction shows `compacting context`. A member that recovers after retries leaves a notice in the board log and the transcript. Members appear in omp's Agent Hub and `history://` index as running only during their own turns, with their current step as the activity.
+
+When the council ends, a status line announces the outcome at once. The report (agreed solution with every member's verification, or the state of play if it stopped early) is posted to the conversation as soon as the main agent is idle; if the agent is mid-turn, the report follows when that turn finishes. Posting it does not start a turn.
 
 - Full transcript: `local://council/<runId>/`
 - Each member's session: `history://Council<Name>`

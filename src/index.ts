@@ -41,12 +41,15 @@ import {
 import { COUNCIL_OUTCOME_LABELS, formatCouncilBudgets } from "./render";
 import { runCouncil } from "./service";
 import { councilMemberToolkit } from "./tools";
+import type { CouncilResult } from "./types";
 
 const REPORT_MESSAGE_TYPE = "council-report";
 const WIDGET_KEY = "council";
 const SPINNER_INTERVAL_MS = 100;
 /** Tail of the invoking conversation handed to the council as context. */
 const MAX_CONTEXT_CHARS = 24_000;
+/** Poll interval while a finished prompt unwinds after its agent loop settled. */
+const IDLE_POLL_MS = 50;
 
 const START = "▶ Start the council";
 const ADD = "+ Add a member…";
@@ -169,10 +172,13 @@ export default function council(pi: ExtensionAPI): void {
 			if (!problem) return;
 			const controller = new AbortController();
 			active = controller;
-			// Runs in the background so the editor stays usable; run() contains every failure.
-			void run(ctx, problem, controller.signal).finally(() => {
-				if (active === controller) active = undefined;
-			});
+			const sessionId = ctx.sessionManager.getSessionId();
+			// Runs in the background so the editor stays usable; run() and postReport() contain every failure.
+			void run(ctx, problem, controller.signal)
+				.finally(() => {
+					if (active === controller) active = undefined;
+				})
+				.then(result => result && postReport(ctx, sessionId, result));
 		},
 	});
 
@@ -432,12 +438,15 @@ export default function council(pi: ExtensionAPI): void {
 		}
 	}
 
-	/** One council run: widget while it deliberates, report into the conversation when it ends. */
-	async function run(ctx: ExtensionCommandContext, problem: string, signal: AbortSignal): Promise<void> {
+	/** One council run: the widget while it deliberates, then the outcome; undefined when it could not run. */
+	async function run(
+		ctx: ExtensionCommandContext,
+		problem: string,
+		signal: AbortSignal,
+	): Promise<CouncilResult | undefined> {
 		const board = new CouncilBoard(problem, ctx.ui.theme);
 		ctx.ui.setWidget(WIDGET_KEY, board.widget, { placement: "aboveEditor" });
 		const timer = ctx.setInterval(() => board.tick(), SPINNER_INTERVAL_MS);
-		const sessionId = ctx.sessionManager.getSessionId();
 		try {
 			const config = await loadConfig();
 			const sessionArtifacts = ctx.sessionManager.getArtifactsDir();
@@ -460,10 +469,35 @@ export default function council(pi: ExtensionAPI): void {
 				board,
 				signal,
 			);
-			const summary = `Council: ${COUNCIL_OUTCOME_LABELS[result.outcome]} — ${result.reason}`;
-			// The report belongs to the session that convened the council.
+			ctx.ui.notify(
+				`Council: ${COUNCIL_OUTCOME_LABELS[result.outcome]} — ${result.reason}`,
+				result.outcome === "consensus" ? "info" : "warning",
+			);
+			return result;
+		} catch (error) {
+			ctx.ui.notify(`Council failed: ${errorText(error)}`, "error");
+			return undefined;
+		} finally {
+			ctx.clearTimer(timer);
+			ctx.ui.setWidget(WIDGET_KEY, undefined);
+		}
+	}
+
+	/**
+	 * Post the report into the session that convened the council, once its agent
+	 * is idle: sent mid-turn it would be steered into unrelated work, and only the
+	 * default idle delivery paints a display message right away.
+	 */
+	async function postReport(ctx: ExtensionCommandContext, sessionId: string, result: CouncilResult): Promise<void> {
+		try {
+			for (;;) {
+				await ctx.waitForIdle();
+				if (ctx.isIdle()) break;
+				// The agent loop settled but its prompt is still unwinding; a message sent now would start a turn.
+				await Bun.sleep(IDLE_POLL_MS);
+			}
 			if (ctx.sessionManager.getSessionId() !== sessionId) {
-				ctx.ui.notify(`${summary} Report: ${result.reportPath ?? "not saved"}`, "info");
+				ctx.ui.notify(`Council report: ${result.reportPath ?? "not saved"}`, "info");
 				return;
 			}
 			pi.sendMessage(
@@ -481,14 +515,10 @@ export default function council(pi: ExtensionAPI): void {
 						usage: result.usage,
 					},
 				},
-				{ triggerTurn: false, deliverAs: "nextTurn" },
+				{ triggerTurn: false },
 			);
-			ctx.ui.notify(summary, result.outcome === "consensus" ? "info" : "warning");
 		} catch (error) {
-			ctx.ui.notify(`Council failed: ${errorText(error)}`, "error");
-		} finally {
-			ctx.clearTimer(timer);
-			ctx.ui.setWidget(WIDGET_KEY, undefined);
+			ctx.ui.notify(`Could not post the council report: ${errorText(error)}`, "error");
 		}
 	}
 }

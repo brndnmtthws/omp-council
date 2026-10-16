@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Api, AssistantMessage, Context, Model, ModelSpec, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
 import { clearCustomApis, registerCustomApi } from "@oh-my-pi/pi-ai";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -53,14 +54,21 @@ function reply(message: Partial<AssistantMessage>): AssistantMessage {
 	};
 }
 
-function recordingHooks(): CouncilRuntimeHooks & { activity: CouncilActivity[]; usage: CouncilUsage[] } {
+function recordingHooks(): CouncilRuntimeHooks & {
+	activity: CouncilActivity[];
+	usage: CouncilUsage[];
+	notices: string[];
+} {
 	const activity: CouncilActivity[] = [];
 	const usage: CouncilUsage[] = [];
+	const notices: string[] = [];
 	return {
 		activity,
 		usage,
+		notices,
 		onActivity: entry => activity.push(entry),
 		onUsage: entry => usage.push(entry),
+		onNotice: text => notices.push(text),
 	};
 }
 
@@ -171,10 +179,10 @@ describe("council session runtime", () => {
 		return (context?.tools ?? []).map(tool => tool.name).sort();
 	}
 
-	function factoryFor(members: ResolvedCouncilMember[]) {
+	function factoryFor(members: ResolvedCouncilMember[], settings: Record<string, unknown> = {}) {
 		return createSessionRuntimeFactory({
 			cwd: project,
-			settings: Settings.isolated(BASE_SETTINGS),
+			settings: Settings.isolated({ ...BASE_SETTINGS, ...settings }),
 			modelRegistry,
 			members,
 			memberTools: councilMemberToolkit(type),
@@ -282,6 +290,44 @@ describe("council session runtime", () => {
 		expect(result.error).toContain("provider exploded");
 		expect(result.aborted).toBeUndefined();
 		expect(hooks.activity.at(-1)?.state).toBe("failed");
+		await runtime.dispose();
+	});
+
+	it("shows provider retries live, records the recovery, and marks the member running only during its turn", async () => {
+		installProvider();
+		const eta = member("eta");
+		const hooks = recordingHooks();
+		const runtime = await factoryFor([eta, member("theta")], { "retry.baseDelayMs": 1 }).createMember(
+			eta,
+			recordingActions(),
+			hooks,
+		);
+		const registry = AgentRegistry.global();
+		expect(registry.get(eta.agentId)?.status).toBe("idle");
+
+		// Bedrock's 500 as its provider reports it: classified transient, so the session retries it.
+		const transient =
+			"internalServerException: The system encountered an unexpected error during processing. Try your request again.";
+		const statusDuringTurn: (string | undefined)[] = [];
+		const failOnce = () => {
+			statusDuringTurn.push(registry.get(eta.agentId)?.status);
+			return reply({
+				content: [],
+				stopReason: "error",
+				errorStatus: 500,
+				errorId: AIError.create(AIError.Flag.Transient),
+				errorMessage: transient,
+			});
+		};
+		replies.push(failOnce, failOnce, () => reply({ content: [{ type: "text", text: "Recovered." }] }));
+
+		const result = await runtime.runTurn("Go.");
+		expect(result.error).toBeUndefined();
+		expect(result.text).toBe("Recovered.");
+		expect(hooks.activity.find(entry => entry.state === "retrying")?.detail).toBe(`1/10: ${transient}`);
+		expect(hooks.notices).toEqual([`ETA recovered after 2 provider errors: ${transient}`]);
+		expect(statusDuringTurn).toEqual(["running", "running"]);
+		expect(registry.get(eta.agentId)?.status).toBe("idle");
 		await runtime.dispose();
 	});
 

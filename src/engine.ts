@@ -105,7 +105,7 @@ class CouncilEngine {
 		this.#name = councilNameResolver(options.members);
 		this.#members = options.members.map(info => ({
 			info,
-			activity: { state: "idle", toolCount: 0 },
+			activity: { state: "idle", toolCount: 0, since: this.#now() },
 			usage: { tokens: 0, cost: 0 },
 			active: false,
 			lastSeen: 0,
@@ -176,6 +176,9 @@ class CouncilEngine {
 						member.usage = usage;
 						this.#checkBudgets();
 						this.#update();
+					},
+					onNotice: text => {
+						this.#append({ type: "notice", text });
 					},
 				});
 			}),

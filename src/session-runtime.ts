@@ -42,6 +42,11 @@ function assistantText(message: AssistantMessage | undefined): string {
 		.trim();
 }
 
+/** A provider error as one bounded line for board rows and notices. */
+function errorLine(text: string): string {
+	return text.replace(/\s+/g, " ").trim().slice(0, 160);
+}
+
 export function createSessionRuntimeFactory(options: CouncilSessionRuntimeOptions): CouncilRuntimeFactory {
 	return {
 		async createMember(member, actions, hooks) {
@@ -109,18 +114,33 @@ export function createSessionRuntimeFactory(options: CouncilSessionRuntimeOption
 					cause: error,
 				});
 			}
+			// createAgentSession registers the member as running; it runs only during its turns.
+			agentRegistry.setStatus(member.agentId, "idle");
 
 			let tokens = 0;
 			let cost = 0;
 			let toolCount = 0;
 			let turnRunning = false;
+			/** Provider errors retried since the last successful request, and the first one's message. */
+			let retries = 0;
+			let retryError = "";
 			let abortCall: Promise<void> | undefined;
 			let disposeCall: Promise<void> | undefined;
 			let turnTools: CouncilToolCallSummary[] = [];
 			let turnAssistant: AssistantMessage | undefined;
 			const pendingTools = new Map<string, CouncilToolCallSummary>();
-			const activity = (state: CouncilActivity["state"], tool?: string, detail?: string) =>
-				hooks.onActivity({ state, tool, detail, toolCount });
+			// The board row, plus the Agent Hub and history:// gist (the registry ignores it outside a turn).
+			const activity = (state: CouncilActivity["state"], tool?: string, detail?: string) => {
+				hooks.onActivity({ state, tool, detail, toolCount, since: Date.now() });
+				agentRegistry.setActivity(
+					member.agentId,
+					state === "tool"
+						? `running ${tool}${detail ? ` ${detail}` : ""}`
+						: detail
+							? `${state} ${detail}`
+							: state,
+				);
+			};
 
 			const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
 				switch (event.type) {
@@ -155,6 +175,29 @@ export function createSessionRuntimeFactory(options: CouncilSessionRuntimeOption
 						activity("thinking");
 						break;
 					}
+					case "auto_retry_start":
+						retries += 1;
+						if (retries === 1) retryError = errorLine(event.errorMessage);
+						activity(
+							"retrying",
+							undefined,
+							`${event.attempt}/${event.maxAttempts}: ${errorLine(event.errorMessage)}`,
+						);
+						break;
+					case "auto_retry_end":
+						if (event.success && retries > 0) {
+							hooks.onNotice(
+								`${member.name} recovered after ${retries} provider error${retries === 1 ? "" : "s"}: ${retryError}`,
+							);
+						}
+						retries = 0;
+						break;
+					case "auto_compaction_start":
+						activity("compacting");
+						break;
+					case "auto_compaction_end":
+						activity("thinking");
+						break;
 					default:
 						break;
 				}
@@ -176,6 +219,9 @@ export function createSessionRuntimeFactory(options: CouncilSessionRuntimeOption
 					pendingTools.clear();
 					abortCall = undefined;
 					turnRunning = true;
+					retries = 0;
+					agentRegistry.setStatus(member.agentId, "running");
+					activity("thinking");
 					const before = session.getLastAssistantMessage();
 					let error: string | undefined;
 					try {
@@ -185,6 +231,8 @@ export function createSessionRuntimeFactory(options: CouncilSessionRuntimeOption
 						error = errorText(err);
 					} finally {
 						turnRunning = false;
+						// Disposal parks the ref; a turn unwinding afterwards must not revive it as idle.
+						if (!disposeCall) agentRegistry.setStatus(member.agentId, "idle");
 					}
 					const latest = session.getLastAssistantMessage();
 					const message = latest !== before ? latest : turnAssistant;
@@ -196,7 +244,7 @@ export function createSessionRuntimeFactory(options: CouncilSessionRuntimeOption
 						activity("idle");
 					} else if (error) {
 						result.error = error;
-						activity("failed", undefined, error.replace(/\s+/g, " ").slice(0, 160));
+						activity("failed", undefined, errorLine(error));
 					} else {
 						activity("idle");
 					}

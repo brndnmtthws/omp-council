@@ -26,6 +26,8 @@ const TEXT_WIDTH = 160;
 const TITLE_WIDTH = 48;
 const DETAIL_WIDTH = 60;
 const MAX_LOG_LINES = 14;
+/** An active member's activity older than this shows its age, so a stalled request reads as stalled. */
+const SHOW_ACTIVITY_AGE_MS = 5_000;
 
 const PHASE_LABELS: Record<CouncilPhase, string> = {
 	setup: "Setting up",
@@ -118,8 +120,13 @@ export function councilStatusLine(outcome: CouncilOutcome, theme: Theme, reason?
 	return outcome === "failed" ? theme.fg("error", `✗ ${label}`) : theme.fg("warning", `● ${label}`);
 }
 
-/** Live rows: a status head, one row per member, and the open proposals. */
-export function renderCouncilLive(snapshot: CouncilSnapshot, spinner: string, theme: Theme): string[] {
+/** Live rows: a status head, one row per member, and the open proposals; `now` ages each member's activity. */
+export function renderCouncilLive(
+	snapshot: CouncilSnapshot,
+	spinner: string,
+	theme: Theme,
+	now = Date.now(),
+): string[] {
 	if (snapshot.outcome) return [];
 	const { budgets, usage } = snapshot;
 	const head = [PHASE_LABELS[snapshot.phase]];
@@ -136,7 +143,7 @@ export function renderCouncilLive(snapshot: CouncilSnapshot, spinner: string, th
 		);
 	}
 	const lines = [`${theme.fg("accent", spinner)} ${theme.fg("dim", head.join(" · "))}`];
-	for (const member of snapshot.members) lines.push(memberRow(member, spinner, theme));
+	for (const member of snapshot.members) lines.push(memberRow(member, spinner, theme, now));
 	const open = snapshot.proposals.filter(proposal => proposal.status === "open");
 	if (open.length > 0) {
 		const proposals = open.map(
@@ -152,7 +159,7 @@ export function renderCouncilLive(snapshot: CouncilSnapshot, spinner: string, th
 	return lines;
 }
 
-function memberRow(member: CouncilMemberSnapshot, spinner: string, theme: Theme): string {
+function memberRow(member: CouncilMemberSnapshot, spinner: string, theme: Theme, now: number): string {
 	const { activity } = member;
 	const stance: string[] = [];
 	if (member.acceptance) {
@@ -164,9 +171,16 @@ function memberRow(member: CouncilMemberSnapshot, spinner: string, theme: Theme)
 	let doing: string;
 	if (activity.state === "failed") doing = theme.fg("error", oneLine(activity.detail ?? "failed", DETAIL_WIDTH));
 	else if (!member.active) doing = theme.fg("dim", "waiting");
+	else if (activity.state === "retrying") {
+		doing = theme.fg("warning", `retrying ${oneLine(activity.detail ?? "", DETAIL_WIDTH)}`.trimEnd());
+	} else if (activity.state === "compacting") doing = "compacting context";
 	else if (activity.state === "tool" && activity.tool) {
 		doing = `${activity.tool}${activity.detail ? ` ${oneLine(activity.detail, DETAIL_WIDTH)}` : ""}`;
 	} else doing = "thinking";
+	const age = now - activity.since;
+	if (member.active && activity.state !== "failed" && age >= SHOW_ACTIVITY_AGE_MS) {
+		doing += theme.fg("dim", ` ${formatDuration(age)}`);
+	}
 	const meta: string[] = [];
 	if (activity.toolCount > 0) meta.push(`${activity.toolCount} tools`);
 	if (member.usage.tokens > 0) meta.push(`${formatNumber(member.usage.tokens)} tok`);
@@ -202,6 +216,8 @@ export class CouncilBoard implements CouncilRunUi {
 	readonly #title: string;
 	readonly #log: string[] = [];
 	#snapshot: CouncilSnapshot | undefined;
+	/** When the snapshot arrived; the elapsed time keeps counting between engine updates. */
+	#snapshotAt = 0;
 	#name: CouncilNameResolver | undefined;
 	#frame = 0;
 	#tui: TUI | undefined;
@@ -229,6 +245,7 @@ export class CouncilBoard implements CouncilRunUi {
 
 	onEvent(event: CouncilEvent, snapshot: CouncilSnapshot): void {
 		this.#snapshot = snapshot;
+		this.#snapshotAt = Date.now();
 		this.#name ??= councilNameResolver(snapshot.members);
 		const line = formatCouncilEventLine(event, this.#name, this.#theme);
 		if (line) this.#push(line);
@@ -237,6 +254,7 @@ export class CouncilBoard implements CouncilRunUi {
 
 	onUpdate(snapshot: CouncilSnapshot): void {
 		this.#snapshot = snapshot;
+		this.#snapshotAt = Date.now();
 	}
 
 	#push(line: string): void {
@@ -248,7 +266,15 @@ export class CouncilBoard implements CouncilRunUi {
 	#lines(): string[] {
 		const frames = this.#theme.getSpinnerFrames("activity");
 		const spinner = frames[this.#frame % frames.length] ?? "·";
-		const live = this.#snapshot ? renderCouncilLive(this.#snapshot, spinner, this.#theme) : [];
+		const now = Date.now();
+		const live = this.#snapshot
+			? renderCouncilLive(
+					{ ...this.#snapshot, elapsedMs: this.#snapshot.elapsedMs + now - this.#snapshotAt },
+					spinner,
+					this.#theme,
+					now,
+				)
+			: [];
 		return [this.#title, ...this.#log, ...live, this.#theme.fg("dim", "/council stop cancels")];
 	}
 }

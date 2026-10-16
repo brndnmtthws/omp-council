@@ -302,13 +302,15 @@ export interface CouncilUsage {
 }
 
 export interface CouncilActivity {
-	state: "idle" | "thinking" | "tool" | "failed";
+	state: "idle" | "thinking" | "tool" | "retrying" | "compacting" | "failed";
 	/** Tool currently running (state `tool`). */
 	tool?: string;
-	/** Short single-line detail: the running tool's primary argument or the failure. */
+	/** Short single-line detail: the running tool's primary argument, the provider error being retried, or the failure. */
 	detail?: string;
 	/** Tool calls made so far by this session. */
 	toolCount: number;
+	/** When this activity was reported (epoch ms); the board shows how long it has lasted. */
+	since: number;
 }
 
 export interface CouncilTurnResult {
@@ -325,6 +327,8 @@ export interface CouncilRuntimeHooks {
 	onActivity(activity: CouncilActivity): void;
 	/** Cumulative usage of this session; called after every model response. */
 	onUsage(usage: CouncilUsage): void;
+	/** A line worth keeping in the transcript, such as a member recovering from provider errors. */
+	onNotice(text: string): void;
 }
 
 /** A persistent, multi-turn session that keeps its own reasoning context. */

@@ -86,6 +86,16 @@ bun test
 
 `omp plugin link .` from the checkout runs it in your omp. To test against another omp release, set the `@oh-my-pi/pi-coding-agent` devDependency to that version.
 
+### Releasing
+
+Releases publish to npm from CI, never by hand. Bump `version` in `package.json`, commit and push to `main`, then create a GitHub release:
+
+```sh
+gh release create v<version> --generate-notes
+```
+
+Publishing the GitHub release runs the Release workflow (`.github/workflows/release.yml`). It fails unless the release tag is `v` plus the `package.json` version, runs `bun run check` and `bun test`, then publishes through npm trusted publishing: no npm token is stored, and npm attaches provenance. A version that is already on npm is skipped.
+
 ## License
 
 MIT (see `LICENSE`).

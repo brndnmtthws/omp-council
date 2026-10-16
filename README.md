@@ -15,14 +15,20 @@ Restart omp. `omp plugin list` shows `omp-council`; `omp plugin uninstall omp-co
 ## Use
 
 ```text
-/council                      # setup: add/remove members, budgets, start
+/council                      # setup: add/remove members, budgets, presets, start
 /council <problem>            # run with the saved members
 /council stop                 # cancel the running council
+/councilpreset                # pick a saved preset to switch to
+/councilpreset save <name>    # save the current members and budgets as a preset
+/councilpreset switch <name>  # make a preset the current council
+/councilpreset delete <name>  # delete a preset
+/councilpreset list           # list presets; the active one is marked
 ```
 
 - **Members:** any model you have credentials for (type to filter). A model can sit twice under different names; mixing model families gives the debate real disagreement. Select a member in the menu to remove it.
 - **Budgets:** optional max rounds, minutes, tokens, and USD. Unlimited by default.
-- **Config:** saved to `~/.omp/agent/council.json` (your active profile's agent dir). Hand edits are fine; a member may carry a `persona`:
+- **Presets:** named councils (members plus budgets) to switch between, like omp's model presets. Save the current council from the setup menu's `★ Presets…` or with `/councilpreset save <name>`. Switching replaces the current members and budgets wholesale, and `/council <problem>` then runs with them. A preset whose members and budgets match the current council shows as active; names start with a letter, then letters, digits, `-` or `_`.
+- **Config:** saved to `~/.omp/agent/council.json` (your active profile's agent dir). Hand edits are fine; a member may carry a `persona`, and `presets` holds the saved councils:
 
   ```json
   {
@@ -30,7 +36,13 @@ Restart omp. `omp plugin list` shows `omp-council`; `omp plugin uninstall omp-co
   		{ "name": "Claude", "model": "anthropic/claude-opus-4-6:high" },
   		{ "name": "GPT", "model": "openai/gpt-5.2", "persona": "Challenge every assumption." }
   	],
-  	"maxMinutes": 30
+  	"maxMinutes": 30,
+  	"presets": {
+  		"cheap": {
+  			"members": [{ "model": "anthropic/claude-haiku-4-5" }, { "model": "openai/gpt-5-mini" }],
+  			"maxCostUsd": 1
+  		}
+  	}
   }
   ```
 

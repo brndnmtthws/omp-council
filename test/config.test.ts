@@ -5,11 +5,17 @@ import * as path from "node:path";
 import { ModelRegistry, Settings } from "@oh-my-pi/pi-coding-agent";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import {
+	applyCouncilPreset,
 	assignCouncilIdentities,
+	type CouncilConfig,
+	deleteCouncilPreset,
+	findActiveCouncilPreset,
+	getCouncilPreset,
 	normalizeCouncilConfig,
 	readCouncilConfig,
 	resolveCouncilBudgets,
 	resolveCouncilMembers,
+	saveCouncilPreset,
 	writeCouncilConfig,
 } from "../src/config";
 
@@ -74,6 +80,89 @@ describe("council config", () => {
 			maxCostUsd: 2,
 		});
 		expect(resolveCouncilBudgets({ members: [] })).toEqual({});
+	});
+});
+
+describe("council presets", () => {
+	test("a preset is a snapshot: editing the council after saving or switching never rewrites it", () => {
+		const config: CouncilConfig = {
+			members: [{ model: "a/x" }, { name: "Skeptic", model: "b/y", persona: "Doubt." }],
+			maxRounds: 3,
+		};
+		saveCouncilPreset(config, "duo");
+		expect(findActiveCouncilPreset(config)).toBe("duo");
+
+		config.members.push({ model: "c/z" });
+		config.members[1]!.persona = "Agree.";
+		config.maxRounds = 5;
+		const snapshot = {
+			members: [{ model: "a/x" }, { name: "Skeptic", model: "b/y", persona: "Doubt." }],
+			maxRounds: 3,
+		};
+		expect(getCouncilPreset(config, "duo")).toEqual(snapshot);
+		expect(findActiveCouncilPreset(config)).toBeUndefined();
+
+		expect(applyCouncilPreset(config, "duo")).toBe(true);
+		expect(findActiveCouncilPreset(config)).toBe("duo");
+		config.members[0]!.name = "Renamed";
+		expect(getCouncilPreset(config, "duo")).toEqual(snapshot);
+	});
+
+	test("switching replaces members and budgets wholesale, so budgets the preset leaves unset become unlimited", () => {
+		const config = normalizeCouncilConfig(
+			{
+				members: ["a/x", "b/y"],
+				maxRounds: 3,
+				maxCostUsd: 5,
+				presets: { cheap: { members: ["c/z", "d/w"], maxMinutes: 10 } },
+			},
+			"council.json",
+		);
+		expect(applyCouncilPreset(config, "cheap")).toBe(true);
+		expect(config.members).toEqual([{ model: "c/z" }, { model: "d/w" }]);
+		expect(resolveCouncilBudgets(config)).toEqual({ maxDurationMs: 600_000 });
+	});
+
+	test("only saved names are presets: missing and Object.prototype names change nothing", () => {
+		const config: CouncilConfig = { members: [{ model: "a/x" }, { model: "b/y" }] };
+		saveCouncilPreset(config, "duo");
+		const before = structuredClone(config);
+		for (const name of ["missing", "constructor"]) {
+			expect(getCouncilPreset(config, name)).toBeUndefined();
+			expect(applyCouncilPreset(config, name)).toBe(false);
+			expect(deleteCouncilPreset(config, name)).toBe(false);
+		}
+		expect(config).toEqual(before);
+	});
+
+	test("saving refuses an invalid name or a roster too small to convene, keeping the saved preset", () => {
+		const config: CouncilConfig = { members: [{ model: "a/x" }, { model: "b/y" }] };
+		saveCouncilPreset(config, "duo");
+		expect(() => saveCouncilPreset(config, "2fast")).toThrow('Invalid preset name "2fast"');
+		config.members.pop();
+		expect(() => saveCouncilPreset(config, "duo")).toThrow("at least two members");
+		expect(getCouncilPreset(config, "duo")?.members).toEqual([{ model: "a/x" }, { model: "b/y" }]);
+	});
+
+	test("presets survive a write and read and still match the council; malformed ones name the preset", async () => {
+		const file = path.join(root, "presets.json");
+		const config: CouncilConfig = {
+			members: [{ name: "GPT", model: "openai/gpt-5" }, { model: "a/x" }],
+			maxTokens: 1000,
+		};
+		saveCouncilPreset(config, "duo");
+		await writeCouncilConfig(config, file);
+		const read = await readCouncilConfig(file);
+		expect(read).toEqual(config);
+		expect(findActiveCouncilPreset(read)).toBe("duo");
+
+		expect(() => normalizeCouncilConfig({ presets: [] }, "council.json")).toThrow('"presets" must be an object');
+		expect(() => normalizeCouncilConfig({ presets: { "my preset": {} } }, "council.json")).toThrow(
+			'preset name "my preset"',
+		);
+		expect(() =>
+			normalizeCouncilConfig({ presets: { duo: { members: [{ name: "Ghost" }] } } }, "council.json"),
+		).toThrow('council.json: presets.duo.members[0] needs a non-empty "model"');
 	});
 });
 

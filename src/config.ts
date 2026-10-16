@@ -1,17 +1,23 @@
-/** Council configuration: the saved roster and budgets, and member model resolution. */
+/** Council configuration: the saved roster and budgets, named presets of them, and member model resolution. */
 import * as path from "node:path";
 import type { ModelRegistry, Settings } from "@oh-my-pi/pi-coding-agent";
 import { formatModelString, resolveCliModel } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { getAgentDir, isEnoent, isRecord } from "@oh-my-pi/pi-utils";
 import type { CouncilBudgets, CouncilParticipantSpec, ResolvedCouncilMember } from "./types";
 
-/** What `/council` saves: the roster plus optional budgets (absent = unlimited). */
-export interface CouncilConfig {
+/** A council setup: the roster plus optional budgets (absent = unlimited). */
+export interface CouncilSetup {
 	members: CouncilParticipantSpec[];
 	maxRounds?: number;
 	maxMinutes?: number;
 	maxTokens?: number;
 	maxCostUsd?: number;
+}
+
+/** What `/council` saves: the current setup, plus named presets `/councilpreset` switches between. */
+export interface CouncilConfig extends CouncilSetup {
+	/** Absent when no preset is saved. */
+	presets?: Record<string, CouncilSetup>;
 }
 
 export const COUNCIL_BUDGET_KEYS = ["maxRounds", "maxMinutes", "maxTokens", "maxCostUsd"] as const;
@@ -45,20 +51,39 @@ export async function writeCouncilConfig(config: CouncilConfig, file = councilCo
 /** Validate a parsed config; `label` prefixes error messages. Zero budgets mean unlimited and are dropped. */
 export function normalizeCouncilConfig(raw: unknown, label: string): CouncilConfig {
 	if (!isRecord(raw)) throw new Error(`${label} must be a JSON object`);
+	const config: CouncilConfig = normalizeCouncilSetup(raw, label, "");
+	if (raw.presets === undefined) return config;
+	if (!isRecord(raw.presets)) throw new Error(`${label}: "presets" must be an object`);
+	const presets: Record<string, CouncilSetup> = {};
+	for (const [name, entry] of Object.entries(raw.presets)) {
+		if (!isValidCouncilPresetName(name)) {
+			throw new Error(`${label}: preset name "${name}" must be a letter, then letters, digits, - or _`);
+		}
+		if (!isRecord(entry)) throw new Error(`${label}: "presets.${name}" must be an object`);
+		presets[name] = normalizeCouncilSetup(entry, label, `presets.${name}.`);
+	}
+	if (Object.keys(presets).length > 0) config.presets = presets;
+	return config;
+}
+
+/** Validate the roster and budgets of the config or of one preset; `prefix` locates them in the file. */
+function normalizeCouncilSetup(raw: Record<string, unknown>, label: string, prefix: string): CouncilSetup {
 	const members = raw.members ?? [];
-	if (!Array.isArray(members)) throw new Error(`${label}: "members" must be a list`);
-	const config: CouncilConfig = {
-		members: members.map((entry, index) => normalizeCouncilParticipant(entry, `${label}: members[${index}]`)),
+	if (!Array.isArray(members)) throw new Error(`${label}: "${prefix}members" must be a list`);
+	const setup: CouncilSetup = {
+		members: members.map((entry, index) =>
+			normalizeCouncilParticipant(entry, `${label}: ${prefix}members[${index}]`),
+		),
 	};
 	for (const key of COUNCIL_BUDGET_KEYS) {
 		const value = raw[key];
 		if (value === undefined) continue;
 		if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-			throw new Error(`${label}: "${key}" must be a non-negative number`);
+			throw new Error(`${label}: "${prefix}${key}" must be a non-negative number`);
 		}
-		if (value > 0) config[key] = value;
+		if (value > 0) setup[key] = value;
 	}
-	return config;
+	return setup;
 }
 
 /** Validate one member entry: a model selector string or `{ name?, model, persona? }`. */
@@ -87,14 +112,80 @@ export function normalizeCouncilParticipant(entry: unknown, label: string): Coun
 	return spec;
 }
 
-/** Engine budgets from the saved configuration. */
-export function resolveCouncilBudgets(config: CouncilConfig): CouncilBudgets {
+/** Engine budgets from a saved setup. */
+export function resolveCouncilBudgets(setup: CouncilSetup): CouncilBudgets {
 	const budgets: CouncilBudgets = {};
-	if (config.maxRounds) budgets.maxRounds = config.maxRounds;
-	if (config.maxMinutes) budgets.maxDurationMs = Math.round(config.maxMinutes * 60_000);
-	if (config.maxTokens) budgets.maxTokens = config.maxTokens;
-	if (config.maxCostUsd) budgets.maxCostUsd = config.maxCostUsd;
+	if (setup.maxRounds) budgets.maxRounds = setup.maxRounds;
+	if (setup.maxMinutes) budgets.maxDurationMs = Math.round(setup.maxMinutes * 60_000);
+	if (setup.maxTokens) budgets.maxTokens = setup.maxTokens;
+	if (setup.maxCostUsd) budgets.maxCostUsd = setup.maxCostUsd;
 	return budgets;
+}
+
+/** Preset names: a letter, then letters, digits, `-` or `_` (the rule model presets use). */
+const PRESET_NAME_PATTERN = /^[a-zA-Z][\w-]*$/;
+
+export function isValidCouncilPresetName(name: string): boolean {
+	return PRESET_NAME_PATTERN.test(name);
+}
+
+/** Saved presets, sorted by name. */
+export function councilPresets(config: CouncilConfig): [name: string, setup: CouncilSetup][] {
+	return Object.entries(config.presets ?? {}).sort(([a], [b]) => a.localeCompare(b));
+}
+
+/** Preset `name`, if saved. Own keys only, so `constructor` and friends never resolve. */
+export function getCouncilPreset(config: CouncilConfig, name: string): CouncilSetup | undefined {
+	const { presets } = config;
+	return presets && Object.hasOwn(presets, name) ? presets[name] : undefined;
+}
+
+/** First preset (by name) identical to the current setup: the same members in the same order, the same budgets. */
+export function findActiveCouncilPreset(config: CouncilConfig): string | undefined {
+	const current = copyCouncilSetup(config);
+	return councilPresets(config).find(([, preset]) => Bun.deepEquals(preset, current))?.[0];
+}
+
+/**
+ * Save the current setup as preset `name`, replacing any preset of that name.
+ *
+ * @throws Error for an invalid name, or a roster too small to convene.
+ */
+export function saveCouncilPreset(config: CouncilConfig, name: string): void {
+	if (!isValidCouncilPresetName(name)) {
+		throw new Error(`Invalid preset name "${name}": use a letter, then letters, digits, - or _`);
+	}
+	if (config.members.length < 2) {
+		throw new Error(`A council preset needs at least two members (found ${config.members.length}).`);
+	}
+	config.presets = { ...config.presets, [name]: copyCouncilSetup(config) };
+}
+
+/** Make preset `name` the current setup: its members and budgets replace the current ones wholesale. */
+export function applyCouncilPreset(config: CouncilConfig, name: string): boolean {
+	const preset = getCouncilPreset(config, name);
+	if (!preset) return false;
+	for (const key of COUNCIL_BUDGET_KEYS) delete config[key];
+	Object.assign(config, copyCouncilSetup(preset));
+	return true;
+}
+
+/** Delete preset `name`; false when it is not saved. */
+export function deleteCouncilPreset(config: CouncilConfig, name: string): boolean {
+	const { presets } = config;
+	if (!presets || !Object.hasOwn(presets, name)) return false;
+	delete presets[name];
+	if (Object.keys(presets).length === 0) delete config.presets;
+	return true;
+}
+
+/** The roster and budgets alone, copied so editing the current setup never edits a preset, or back. */
+function copyCouncilSetup(setup: CouncilSetup): CouncilSetup {
+	const copy: CouncilSetup = { members: setup.members.map(member => ({ ...member })) };
+	for (const key of COUNCIL_BUDGET_KEYS) {
+		if (setup[key] !== undefined) copy[key] = setup[key];
+	}
+	return copy;
 }
 
 /**

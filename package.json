@@ -2,6 +2,26 @@
 	"name": "omp-council",
 	"version": "0.1.0",
 	"description": "Council for oh-my-pi: several models debate a problem until they unanimously accept and independently verify one proposal",
+	"keywords": [
+		"omp",
+		"oh-my-pi",
+		"omp-plugin",
+		"council",
+		"multi-model",
+		"consensus",
+		"llm",
+		"agents"
+	],
+	"homepage": "https://github.com/brndnmtthws/omp-council#readme",
+	"bugs": {
+		"url": "https://github.com/brndnmtthws/omp-council/issues"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/brndnmtthws/omp-council.git"
+	},
+	"license": "MIT",
+	"author": "Brenden Matthews <brenden@brndn.io>",
 	"type": "module",
 	"omp": {
 		"extensions": [

@@ -1,6 +1,6 @@
 {
 	"name": "omp-council",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"description": "Council for oh-my-pi: several models debate a problem until they unanimously accept and independently verify one proposal",
 	"keywords": [
 		"omp",

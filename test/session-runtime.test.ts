@@ -32,6 +32,8 @@ type Reply = (context: Context, options: SimpleStreamOptions | undefined) => Ass
 
 let replies: Reply[] = [];
 const contexts: Context[] = [];
+/** The model each scripted request went to. */
+const requestModels: string[] = [];
 
 function reply(message: Partial<AssistantMessage>): AssistantMessage {
 	return {
@@ -126,6 +128,7 @@ describe("council session runtime", () => {
 		clearCustomApis();
 		replies = [];
 		contexts.length = 0;
+		requestModels.length = 0;
 		for (const id of agentIds.splice(0)) AgentRegistry.global().unregister(id);
 	});
 
@@ -135,12 +138,15 @@ describe("council session runtime", () => {
 	});
 
 	function installProvider(): void {
-		registerCustomApi(API, (_model, context, options) => {
+		registerCustomApi(API, (requestModel, context, options) => {
 			const stream = new AssistantMessageEventStream();
 			// Auxiliary requests (e.g. title generation) carry no tools; only council
 			// turns consume the scripted replies.
 			const scripted = (context.tools?.length ?? 0) > 0;
-			if (scripted) contexts.push(context);
+			if (scripted) {
+				contexts.push(context);
+				requestModels.push(requestModel.id);
+			}
 			const next = scripted ? replies.shift() : undefined;
 			const message = next ? next(context, options) : reply({ content: [{ type: "text", text: "idle" }] });
 			if (message === "hang") {
@@ -290,6 +296,40 @@ describe("council session runtime", () => {
 		expect(result.error).toContain("provider exploded");
 		expect(result.aborted).toBeUndefined();
 		expect(hooks.activity.at(-1)?.state).toBe("failed");
+		await runtime.dispose();
+	});
+
+	it("keeps a member on its own model when its provider fails, even with a fallback chain", async () => {
+		installProvider();
+		// The chain points at another model: a member that switched to it would answer under the wrong name.
+		authStorage.keys.setRuntime("managed-backup", "test-key");
+		modelRegistry.registerProvider("managed-backup", {
+			api: API,
+			baseUrl: "http://127.0.0.1:9/v1",
+			apiKey: "test-key",
+			models: [
+				{
+					id: "council-backup",
+					name: "Council backup",
+					reasoning: false,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 32_000,
+					maxTokens: 1024,
+				},
+			],
+		});
+		const iota = member("iota");
+		const runtime = await factoryFor([iota, member("kappa")], {
+			"retry.fallbackChains": { default: ["managed-backup/council-backup"] },
+		}).createMember(iota, recordingActions(), recordingHooks());
+		replies.push(
+			() => reply({ content: [], stopReason: "error", errorMessage: "provider exploded" }),
+			() => reply({ content: [{ type: "text", text: "Answered by the backup." }] }),
+		);
+		const result = await runtime.runTurn("Go.");
+		expect(requestModels).toEqual(["council-fake"]);
+		expect(result.error).toContain("provider exploded");
 		await runtime.dispose();
 	});
 

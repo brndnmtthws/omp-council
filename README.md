@@ -39,7 +39,7 @@ When the council ends, a status line announces the outcome at once. The report (
 
 ## Setup
 
-- **Members:** Any model you have credentials for (the picker is type-to-filter). A council needs at least two members. A model can sit twice under different names. Select a member in the setup menu to remove it.
+- **Members:** Any model you have credentials for (the picker is type-to-filter). A council needs at least two members. A model can sit twice under different names. Select a member in the setup menu to remove it. omp's retry fallback and context promotion stay off for members, so a member never hands its turn to another model.
 - **Budgets:** Optional max rounds, minutes, tokens, and USD. Unlimited by default.
 - **Presets:** Named councils (members plus budgets) to switch between, like omp's model presets. Save the current council from the setup menu's `★ Presets…` entry or with `/councilpreset save <name>`. Saving needs at least two members, and preset names start with a letter, then letters, digits, `-` or `_`. Switching replaces the current members and budgets wholesale; a budget the preset leaves unset becomes unlimited. `/council <problem>` then runs with them. A preset whose members and budgets match the current council shows as active. Picking a preset from the menu or from the bare `/councilpreset` picker asks first when the current council is not saved as any preset; a typed `/councilpreset switch <name>` does not ask.
 - **Config:** Saved to `~/.omp/agent/council.json` (the active profile's agent dir), shared by every project. Hand edits are fine; a member may carry a `persona`, and `presets` holds the saved councils:

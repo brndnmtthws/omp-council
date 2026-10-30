@@ -78,9 +78,13 @@ export function createSessionRuntimeFactory(options: CouncilSessionRuntimeOption
 					thinkingLevel: resolved.thinking,
 					modelRegistry: options.modelRegistry,
 					authStorage: options.modelRegistry.authStorage,
+					// A member must answer from its own model: a fallback or context promotion could switch to
+					// another one, even another member's, while the board still credits the chosen model.
 					settings: createSubagentSettings(options.settings, {
 						"async.enabled": false,
 						"bash.autoBackground.enabled": false,
+						"retry.modelFallback": false,
+						"contextPromotion.enabled": false,
 					}),
 					toolNames: [...MEMBER_TOOL_NAMES, ...COUNCIL_MEMBER_TOOL_NAMES],
 					restrictToolNames: true,

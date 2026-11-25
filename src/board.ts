@@ -3,8 +3,8 @@
  * snapshots become live rows (status head, one row per member, open
  * proposals), repainted on the host's render loop.
  */
-import type { Theme } from "@oh-my-pi/pi-coding-agent";
-import { type Component, Container, Text, type TUI } from "@oh-my-pi/pi-tui";
+import type { ExtensionRows, ExtensionUiHost, Theme } from "@oh-my-pi/pi-coding-agent";
+import { replaceTabs, wrap } from "@oh-my-pi/pi-tui/text/width";
 import { formatDuration, formatNumber, sanitizeText } from "@oh-my-pi/pi-utils";
 import {
 	COUNCIL_OUTCOME_LABELS,
@@ -198,15 +198,18 @@ function memberRow(member: CouncilMemberSnapshot, spinner: string, theme: Theme,
 }
 
 /** Lines rebuilt on every paint, so spinner ticks and snapshots need only a render request. */
-class CouncilWidget extends Container {
-	constructor(readonly lines: () => readonly string[]) {
-		super();
-	}
+class CouncilWidget implements ExtensionRows {
+	constructor(readonly lines: () => readonly string[]) {}
 
-	override render(width: number): readonly string[] {
-		this.clear();
-		for (const line of this.lines()) this.addChild(new Text(line, 1, 0));
-		return super.render(width);
+	render(width: number): readonly string[] {
+		const contentWidth = Math.max(1, width - 2);
+		const rows: string[] = [];
+		for (const line of this.lines()) {
+			for (const wrapped of wrap(replaceTabs(line), contentWidth)) {
+				rows.push(` ${wrapped}`);
+			}
+		}
+		return rows;
 	}
 }
 
@@ -220,7 +223,7 @@ export class CouncilBoard implements CouncilRunUi {
 	#snapshotAt = 0;
 	#name: CouncilNameResolver | undefined;
 	#frame = 0;
-	#tui: TUI | undefined;
+	#ui: ExtensionUiHost | undefined;
 
 	constructor(problem: string, theme: Theme) {
 		this.#theme = theme;
@@ -228,15 +231,15 @@ export class CouncilBoard implements CouncilRunUi {
 	}
 
 	/** Factory for `ctx.ui.setWidget`. */
-	readonly widget = (tui: TUI): Component => {
-		this.#tui = tui;
+	readonly widget = (ui: ExtensionUiHost): ExtensionRows => {
+		this.#ui = ui;
 		return new CouncilWidget(() => this.#lines());
 	};
 
 	/** Advance the spinner. */
 	tick(): void {
 		this.#frame += 1;
-		this.#tui?.requestRender();
+		this.#ui?.requestRender();
 	}
 
 	log(text: string): void {
@@ -249,7 +252,7 @@ export class CouncilBoard implements CouncilRunUi {
 		this.#name ??= councilNameResolver(snapshot.members);
 		const line = formatCouncilEventLine(event, this.#name, this.#theme);
 		if (line) this.#push(line);
-		else this.#tui?.requestRender();
+		else this.#ui?.requestRender();
 	}
 
 	onUpdate(snapshot: CouncilSnapshot): void {
@@ -260,11 +263,11 @@ export class CouncilBoard implements CouncilRunUi {
 	#push(line: string): void {
 		this.#log.push(line);
 		if (this.#log.length > MAX_LOG_LINES) this.#log.splice(0, this.#log.length - MAX_LOG_LINES);
-		this.#tui?.requestRender();
+		this.#ui?.requestRender();
 	}
 
 	#lines(): string[] {
-		const frames = this.#theme.getSpinnerFrames("activity");
+		const frames = this.#theme.symbols.activityFrames;
 		const spinner = frames[this.#frame % frames.length] ?? "·";
 		const now = Date.now();
 		const live = this.#snapshot

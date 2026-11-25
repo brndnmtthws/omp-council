@@ -20,7 +20,7 @@ import { formatModelString } from "@oh-my-pi/pi-coding-agent/config/model-resolv
 import { MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { buildSessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import { formatSessionHistoryMarkdown } from "@oh-my-pi/pi-coding-agent/session/session-history-format";
-import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
+import type { AutocompleteItem } from "@oh-my-pi/pi-coding-agent/autocomplete/autocomplete";
 import { CouncilBoard } from "./board";
 import {
 	applyCouncilPreset,

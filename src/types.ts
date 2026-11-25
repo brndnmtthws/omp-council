@@ -9,7 +9,7 @@
  * the exact same proposal version.
  */
 import type { Api, Model } from "@oh-my-pi/pi-ai";
-import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
+import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-coding-agent/utils/render-utils";
 import type { CustomTool, ModelRegistry, Settings } from "@oh-my-pi/pi-coding-agent";
 import type { LocalProtocolOptions } from "@oh-my-pi/pi-coding-agent/internal-urls/local-protocol";
 
